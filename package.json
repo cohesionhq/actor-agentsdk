@@ -1,0 +1,26 @@
+{
+	"name": "actor-agentsdk",
+	"version": "0.1.0",
+	"description": "Offers Claude Code to Cohesion as actors, through the Claude Agent SDK.",
+	"type": "module",
+	"private": true,
+	"license": "AGPL-3.0-only",
+	"author": "Jackson Zamorano",
+	"bin": {
+		"actor-agentsdk": "index.ts"
+	},
+	"scripts": {
+		"start": "bun index.ts run",
+		"check": "tsc --noEmit -p .",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@anthropic-ai/claude-agent-sdk": "^0.3.316",
+		"cohesion-agent-kit": "file:../cohesion-agent-kit",
+		"cohesion-ts": "file:../cohesion-ts"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^7"
+	}
+}
