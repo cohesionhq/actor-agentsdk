@@ -22,8 +22,9 @@ for the machine's details.
   you to deploy. When asked, make it the very last step, after committing,
   pushing and sending your report, since it may end your session mid-command.
 - **`bun install`** rewrites `node_modules`, including the SDK's `claude`
-  binary that live sessions spawn. Run it only when a dependency,
-  `../cohesion-ts` or `../cohesion-agent-kit` changed, and say so in the report.
+  binary that live sessions spawn. Run it (or `bun update`) only when a
+  dependency changed, cohesion-ts and cohesion-agent-kit included, and say so
+  in the report.
 - **`install.sh`** compiles `actor-agentsdk` into `~/bin`; the service doesn't
   use it. Don't run it unless asked.
 - **The real config** is watched: `add` or `remove` without `--config`

@@ -1,6 +1,6 @@
 ---
 name: verify
-description: How to check a change in actor-agentsdk is right, and what "passing" means here. Use before committing or reporting any change to this repo, when a typecheck or test fails and you need to know whether it is yours, after changing ../cohesion-ts or ../cohesion-agent-kit, or when you want to exercise the CLI without touching the live client.
+description: How to check a change in actor-agentsdk is right, and what "passing" means here. Use before committing or reporting any change to this repo, when a typecheck or test fails and you need to know whether it is yours, after moving to a new cohesion-ts or cohesion-agent-kit, or when you want to exercise the CLI without touching the live client.
 ---
 
 # Verify a change
@@ -36,8 +36,8 @@ regression would quietly break. Follow the existing files:
   Private members are reached with `as unknown as { … }`, as the fake does.
 - `test/usage.test.ts`, `test/images.test.ts`, `test/offers.test.ts`.
 
-The config, the CLI, call routing and the image rules are tested in
-`../cohesion-agent-kit`.
+The config, the CLI, call routing and the image rules live in
+cohesion-agent-kit (cohesionhq/actor-kit), which has no tests of its own.
 
 Don't pin whole wire JSON, error wording, or timing (no tests that sleep
 on real timers; `Bun.sleep(0)` to let promises settle is fine). Run one
@@ -45,12 +45,10 @@ file with `bun test test/session.test.ts`, one test with `-t '<name part>'`.
 
 ## After changing cohesion-ts or the kit
 
-`node_modules/cohesion-ts` and `node_modules/cohesion-agent-kit` are copies
-of `../cohesion-ts` and `../cohesion-agent-kit`, not links.
-After editing either (and passing its own `bun run check` and
-`bun test`), run `bun install` here so this repo sees it, then the checks.
-`diff -rq --exclude=node_modules --exclude=.git ../cohesion-agent-kit node_modules/cohesion-agent-kit`
-shows whether a copy is stale.
+Both come from GitHub (`github:cohesionhq/ts`, `github:cohesionhq/actor-kit`)
+at the commits `bun.lock` pins. Once a change to either is pushed (and passes
+its own `bun run check`), run `bun update cohesion-agent-kit cohesion-ts` here,
+then the checks, and commit the new `bun.lock`.
 
 ## Exercising the CLI
 

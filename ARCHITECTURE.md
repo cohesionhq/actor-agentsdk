@@ -65,14 +65,15 @@ particular to Claude Code, behind the kit's `SessionEngine` and
 
 ## Dependencies
 
-- `cohesion-ts` (`file:../cohesion-ts`) owns the protocol: frames, pairing,
+- `cohesion-ts` (`github:cohesionhq/ts`) owns the protocol: frames, pairing,
   TLS, reconnects. A protocol change starts in cohesion, then cohesion-ts,
   then here.
-- `cohesion-agent-kit` (`file:../cohesion-agent-kit`) owns what actor clients
+- `cohesion-agent-kit` (`github:cohesionhq/actor-kit`) owns what actor clients
   share, on top of cohesion-ts. What `actor-opencode` needs too belongs
   there, not here.
-- Both are copies under `node_modules` (the kit has its own of cohesion-ts),
-  so run `bun install` after changing either.
+- Both come from GitHub at the commits `bun.lock` pins, with one copy of
+  cohesion-ts for both. A change to either reaches this client once it's
+  pushed and `bun update cohesion-agent-kit cohesion-ts` has run.
 - `@anthropic-ai/claude-agent-sdk` ships the `claude` binary under
   `node_modules`; sessions load user, project and local settings like the
   terminal does.

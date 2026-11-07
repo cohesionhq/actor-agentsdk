@@ -7,9 +7,9 @@ Each actor session is one Claude Code session in its directory: what the user sa
 Cohesion goes in as the session's input, and Claude Code's words, tool uses,
 questions, permission prompts and plans come back as the actor session's transcript,
 with its status and progress. See `docs/actors.md` in cohesion for the
-protocol; this client speaks it through [cohesion-ts](../cohesion-ts), and
+protocol; this client speaks it through [cohesion-ts](https://github.com/cohesionhq/ts), and
 its command line, configuration and call routing are
-[cohesion-agent-kit](../cohesion-agent-kit)'s.
+[cohesion-agent-kit](https://github.com/cohesionhq/actor-kit)'s.
 
 It runs on Bun, as the user who runs it, with that user's Claude Code login
 and settings (user, project and local settings and `CLAUDE.md` load as they
@@ -148,7 +148,8 @@ bun test
 ```
 
 CI (`.github/workflows/test.yml`) runs both on every push to `master`,
-against `master` of cohesion-ts and cohesion-agent-kit.
+against the commits of cohesion-ts and cohesion-agent-kit that `bun.lock`
+pins.
 
 ## Licence
 

@@ -3,9 +3,9 @@
 `actor-agentsdk`: a Cohesion actor client that runs Claude Code through
 the Claude Agent SDK, on Bun. Read `README.md` first, then `ARCHITECTURE.md`,
 then `docs/actors.md` in cohesion (`../cohesion`), which this implements. It
-talks to cohesiond only through `cohesion-ts` (`../cohesion-ts`); protocol
+talks to cohesiond only through `cohesion-ts` (cohesionhq/ts); protocol
 work belongs there, not here. What every actor client shares (CLI, config,
-call routing, run loop) is `cohesion-agent-kit` (`../cohesion-agent-kit`).
+call routing, run loop) is `cohesion-agent-kit` (cohesionhq/actor-kit).
 
 - `index.ts`: `runCli` and `ActorService`. `src/host.ts`: the kit's
   `SessionEngine`, one `ActorSession` per actor session. `src/session.ts`: one Claude Code session per actor session.
