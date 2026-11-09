@@ -4,7 +4,7 @@
 	"description": "Offers Claude Code to Cohesion as actors, through the Claude Agent SDK.",
 	"type": "module",
 	"private": true,
-	"license": "AGPL-3.0-only",
+	"license": "MIT",
 	"author": "Jackson Zamorano",
 	"bin": {
 		"actor-agentsdk": "index.ts"
