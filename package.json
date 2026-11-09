@@ -1,7 +1,7 @@
 {
 	"name": "actor-agentsdk",
 	"version": "0.1.0",
-	"description": "Offers Claude Code to Cohesion as actors, through the Claude Agent SDK.",
+	"description": "Offers Agent SDK to Cohesion as actors, through the Claude Agent SDK.",
 	"type": "module",
 	"private": true,
 	"license": "MIT",

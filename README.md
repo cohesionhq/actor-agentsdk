@@ -1,6 +1,6 @@
 # actor-agentsdk
 
-Offers Claude Code to Cohesion as actors, one per directory, and runs the
+Offers Agent SDK to Cohesion as actors, one per directory, and runs the
 actor sessions Cohesion hands them through the
 [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk).
 Each actor session is one Claude Code session in its directory: what the user says in

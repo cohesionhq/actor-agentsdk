@@ -276,7 +276,7 @@ export class ActorSession {
 		} catch (error) {
 			this.context.log(`session ${this.id}: ${error instanceof Error ? error.message : String(error)}`);
 			if (this.stretch === stretch && !this.stopping) {
-				await this.report({ kind: 'message', content: { kind: 'text', text: `Claude Code stopped: ${error instanceof Error ? error.message : error}` } });
+				await this.report({ kind: 'message', content: { kind: 'text', text: `Agent SDK stopped: ${error instanceof Error ? error.message : error}` } });
 				await this.setStatus('failed');
 			}
 		} finally {

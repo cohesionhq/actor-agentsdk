@@ -23,7 +23,7 @@ async function run(directory: string): Promise<void> {
 	try {
 		models = await availableModels();
 	} catch (error) {
-		log(`Couldn't list Claude Code's models, so sessions run on its default: ${error instanceof Error ? error.message : error}`);
+		log(`Couldn't list Agent SDK's models, so sessions run on its default: ${error instanceof Error ? error.message : error}`);
 	}
 
 	let actors = config.actors;

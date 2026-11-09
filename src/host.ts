@@ -14,7 +14,7 @@ import type { Usage } from './usage.ts';
 export function claudeCodeEngine(store: SessionStore<SessionRecord>, usage: Usage, log: (message: string) => void): SessionEngine<SessionRecord> {
 	return {
 		speaker: 'Claude',
-		agentSession: 'a Claude Code session',
+		agentSession: 'an Agent SDK session',
 		toolName: displayName,
 		start: (actor, call) => ({
 			...fresh(actor.identifier, call.mode, call.model, call.effort),
@@ -27,7 +27,7 @@ export function claudeCodeEngine(store: SessionStore<SessionRecord>, usage: Usag
 		}),
 		checkMode: (_, identifier) => {
 			const offered = MODES.find((mode) => mode.identifier === identifier);
-			if (!offered) throw new Error(`Claude Code has no mode ${identifier}.`);
+			if (!offered) throw new Error(`Agent SDK has no mode ${identifier}.`);
 			return offered.identifier;
 		},
 		// The host hands this what `checkMode` returned.

@@ -7,7 +7,7 @@ import { query, type EffortLevel, type ModelInfo, type PermissionMode } from '@a
 import type { ActorEntry } from 'cohesion-agent-kit';
 import type { ActorDefinition, ActorModel } from 'cohesion-ts';
 
-export const PRODUCT = 'Claude Code';
+export const PRODUCT = 'Agent SDK';
 
 /** The modes offered, the first the default; each is a Claude Code permission mode. */
 export const MODES: { identifier: PermissionMode; title: string; description: string }[] = [
