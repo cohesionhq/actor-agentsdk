@@ -80,10 +80,31 @@ session. `add` and `remove` take effect on a running client at once.
   the SDK gives thinking with no text. Each stretch with text is reported as a
   `thinking` message and ended (`end`) at once: its text comes only once it
   is done and a message's text can't change, so Cohesion shows its time as
-  about nothing. A subagent's thinking stays inside its tool use, and
+  about nothing. Thinking
+  of a subagent goes in its own transcript (below), and
   thinking with no text, or redacted, isn't shown. A background agent's tool
   use stays open (no `end`) until it finishes, though its tool result came
   at once; the `task_notification` ends it, or the end of the process.
+- **Subagents**: `forwardSubagentText: true` makes Claude Code forward a
+  subagent's text and thinking, not just its tools. Each subagent (a
+  `local_agent` `task_started`, by its `task_id`, which every message of it
+  carries as `agent_id`) is `launch`ed to Cohesion under the session, before
+  anything else about it: `title` its description, `agent_type` its
+  `subagent_type`, `background` its `is_backgrounded`, `message_id` the
+  Cohesion message of the tool use that launched it, `parent` the subagent
+  whose transcript holds that tool use (or none), and, once its first step
+  shows it, `model` by launching again. Its thinking, text and tool uses (with
+  their `end`s) and its context (by its model's window, once a turn has
+  said it) go in its own transcript, addressed with `subagent`; the
+  session's own status, progress and turn aren't touched. Its permission and
+  question requests (`can_use_tool`'s `agentID`) are in its transcript too, and
+  mark it `needsAttention`; the user's answer arrives as `sendActorSessionMessage`
+  with `subagent` and goes to that request, and words to the session never
+  answer one of a subagent's. `task_updated`/`task_notification` settle it: `completed` and
+  `stopped`/`killed` are `idle` ("Done"), `failed` is `failed` (with its error as a
+  message); a foreground one is also done when its tool use gets its result. A
+  stopped session, or the end of the process, leaves working ones `idle`. After a reconnect
+  every subagent the process still knows is launched again, parents first, with its status.
 - **Tool categories**: each tool use carries a `category` for its icon,
   from its name: `command` (`Bash`, `BashOutput`, `KillShell`), `read`
   (`Read`, `NotebookRead`, `LS`), `edit` (`Edit`, `MultiEdit`, `Write`,

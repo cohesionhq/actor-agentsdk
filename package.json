@@ -16,7 +16,7 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.3.321",
-		"cohesion-agent-kit": "github:cohesionhq/actor-kit",
+		"cohesion-agent-kit": "github:cohesionhq/actor-kit#2a8fc6941e466246e5a14dbf9c25157f48accf96",
 		"cohesion-ts": "github:cohesionhq/ts"
 	},
 	"devDependencies": {

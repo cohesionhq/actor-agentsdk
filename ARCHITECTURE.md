@@ -63,6 +63,14 @@ particular to Claude Code, behind the kit's `SessionEngine` and
   `tool_use_id`, or when the process ends or restarts. Never report what cohesiond sets itself; rules:
   `docs/actors.md` "Statuses".
 
+- **Subagents**: `ActorSession` keeps a kit `Subagents` (the launched ones and
+  their statuses, for the resync), `children` (what each launch said, by task
+  id), `taskOf` (the subagent each launching tool use started) and `windows`
+  (context window per model, from `modelUsage`). A `Use` and a `Waiter` carry an
+  `owner`: the subagent key whose transcript they are in, or the session's own.
+  `report(…, subagent)` goes through the kit's `reportTo`, and skips a subagent
+  cohesiond never took.
+
 ## Dependencies
 
 - `cohesion-ts` (`github:cohesionhq/ts`) owns the protocol: frames, pairing,

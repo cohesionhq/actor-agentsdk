@@ -14,8 +14,8 @@ import {
 	type SDKSessionInfo,
 	type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { SessionRecordBase, SessionStore } from 'cohesion-agent-kit';
-import type { ActorSaidContent, ActorSessionReport, ActorSessionStatus, ActorUserContent, Client, ClientImage, ContextUsage } from 'cohesion-ts';
+import { Subagents, reportTo, type AddressedReport, type SessionRecordBase, type SessionStore, type SubagentReport } from 'cohesion-agent-kit';
+import type { ActorSaidContent, ActorSessionStatus, ActorUserContent, Client, ClientImage, ContextUsage } from 'cohesion-ts';
 
 import { COHESION_INSTRUCTIONS } from './instructions.ts';
 import { imageBlocks, imagesIn, readsImage, sendable } from './images.ts';
@@ -93,13 +93,39 @@ interface Stretch {
 	closed?: boolean;
 }
 
+/** A request waiting on the user, and whose transcript it is in: a subagent's key, or the session's own when `undefined`. */
+interface Waiter {
+	answer: (response: ActorUserContent | null) => void;
+	owner: string | undefined;
+}
+
+/** What is known of a subagent Claude Code launched, as its launch says it. */
+interface Child {
+	title: string;
+	parent: string | null;
+	/** The Cohesion message of the tool use that launched it, once known. */
+	messageId: number | null;
+	type: string | null;
+	model: string | null;
+	background: boolean;
+	/** The context last said for it. */
+	said: ContextUsage | null;
+}
+
 export class ActorSession {
 	/** Where the session stands, as this client last reported it. */
 	status: ActorSessionStatus = 'idle';
 	private progress: string | null = null;
 	private stretch: Stretch | null = null;
 	/** The requests waiting on the user, by their message's id. */
-	private readonly waiting = new Map<number, (response: ActorUserContent | null) => void>();
+	private readonly waiting = new Map<number, Waiter>();
+		/** The subagents Claude Code launched, as cohesiond is told of them, by Claude Code's id for each (its task's). */
+		private readonly subagents: Subagents;
+		private readonly children = new Map<string, Child>();
+		/** The subagent each tool use launched, by the tool use's id: its messages say it as their parent. */
+		private readonly taskOf = new Map<string, string>();
+		/** How many tokens each model's context holds, as Claude Code last said. */
+		private readonly windows = new Map<string, number>();
 	/**
 	 * The tool uses waiting on their results, by Claude Code's id for them,
 	 * with the ids of the messages that showed them once their replies come,
@@ -153,7 +179,9 @@ export class ActorSession {
 		readonly id: number,
 		private record: SessionRecord,
 		private readonly context: ActorSessionContext,
-	) {}
+	) {
+		this.subagents = Subagents.of(context.client, id);
+	}
 
 	/**
 	 * Hands the session what the user said, with the images they attached: more
@@ -161,19 +189,21 @@ export class ActorSession {
 	 * them over: Claude Code, held on them, hears the words as their answer
 	 * and carries on.
 	 */
-	hear(content: ActorUserContent, images: ClientImage[] = []): void {
+	hear(content: ActorUserContent, images: ClientImage[] = [], subagent?: string): void {
 		if (content.kind === 'text') {
-			if (this.waiting.size === 0) return this.say(content.text, images);
-			for (const answer of [...this.waiting.values()]) answer(content);
+			// Only the requests of the transcript spoken in: words to the session pass over a subagent's.
+			const asked = [...this.waiting.values()].filter((waiter) => waiter.owner === subagent);
+			if (asked.length === 0) return this.say(content.text, images);
+			for (const { answer } of asked) answer(content);
 			if (images.length) this.say('The images I attached to my reply:', images);
 			return;
 		}
-		const answer = this.waiting.get(content.request_id);
-		if (!answer) {
+		const waiter = this.waiting.get(content.request_id);
+		if (!waiter || waiter.owner !== subagent) {
 			// Asked by a process that has since ended: Claude Code reads it as words.
 			return this.say(describe(content), images);
 		}
-		answer(content);
+		waiter.answer(content);
 		// A response can't carry images to Claude Code, so they follow it.
 		if (images.length) this.say('The images I attached to my response:', images);
 	}
@@ -197,6 +227,8 @@ export class ActorSession {
 		this.unhold();
 		this.status = 'idle';
 		this.progress = null;
+		// Cohesion leaves its subagents idle, as stopped, itself.
+		await this.settleChildren();
 		const { stretch } = this;
 		if (!stretch || !busy) return;
 		// The background work goes too, or Claude Code would take it up again once done.
@@ -206,7 +238,7 @@ export class ActorSession {
 		// A held turn has ended already: there's nothing to interrupt.
 		if (held) return;
 		this.stopping = true;
-		for (const answer of this.waiting.values()) answer(null);
+		for (const { answer } of this.waiting.values()) answer(null);
 		await stretch.query.interrupt();
 	}
 
@@ -219,12 +251,15 @@ export class ActorSession {
 	}
 
 	/** Reports where the session stands, for a session that just began: cohesiond forgot. */
-	async resync(report: (report: ActorSessionReport) => Promise<unknown>): Promise<void> {
-		if (this.status !== 'working' && this.status !== 'needsAttention') return;
-		await report({ kind: 'status', status: this.status });
-		await report({ kind: 'progress', progress: this.progress });
-		// Said while cohesiond was away, it may not have kept it.
-		if (this.record.titled === 'pending' && this.record.title) await report({ kind: 'title', title: this.record.title });
+	async resync(report: AddressedReport): Promise<void> {
+		if (this.status === 'working' || this.status === 'needsAttention') {
+			await report({ kind: 'status', status: this.status });
+			await report({ kind: 'progress', progress: this.progress });
+			// Said while cohesiond was away, it may not have kept it.
+			if (this.record.titled === 'pending' && this.record.title) await report({ kind: 'title', title: this.record.title });
+		}
+		// Launched again, parents first, each with its status: cohesiond settled the working ones idle when it lost us.
+		await this.subagents.resync(report);
 	}
 
 	private open(): Stretch {
@@ -251,6 +286,8 @@ export class ActorSession {
 					effort: (record.effort as EffortLevel | null) ?? undefined,
 					// Left to itself Claude Code keeps its thinking's text from the SDK.
 					thinking: { type: 'adaptive', display: 'summarized' },
+					// A subagent's own text and thinking, not just its tools, fill its transcript.
+					forwardSubagentText: true,
 					// The Claude Code session goes by the given title rather than one of its own.
 					...(!record.started && record.titled === 'given' && record.title ? { title: record.title } : {}),
 					...(record.started ? { resume: record.session_id } : { sessionId: record.session_id }),
@@ -288,8 +325,118 @@ export class ActorSession {
 				await this.finish();
 				// Its background work ended with it.
 				this.background = [];
+				await this.settleChildren();
 				if (this.held) await this.settle();
+			} else if (!this.stretch) await this.settleChildren();
+		}
+	}
+
+	/**
+	 * A step of a subagent, which goes in its own transcript: what it says,
+	 * thinks and does, and its context. It leaves the session's own status,
+	 * progress and turn alone.
+	 */
+	private async child(message: Extract<SDKMessage, { type: 'assistant' }>): Promise<void> {
+		const key = message.agent_id ?? (message.parent_tool_use_id ? this.taskOf.get(message.parent_tool_use_id) : undefined);
+		if (!key) return;
+		// One cohesiond was never told of yet, such as when the notice of its start was missed: launched from what its messages say.
+		if (!this.children.has(key)) {
+			const tool = message.parent_tool_use_id ?? undefined;
+			await this.launchChild(key, { description: message.task_description ?? message.subagent_type ?? 'Subagent', subagent_type: message.subagent_type, tool_use_id: tool });
+		}
+		const child = this.children.get(key);
+		if (!child || !this.subagents.has(key)) return;
+		const model = message.message.model;
+		// The model it runs on, said once its first step shows it.
+		if (model && child.model !== model) await this.launchChild(key, { model });
+		// A resumed one, or one that took a step after it was said done, is working again.
+		const status = this.subagents.status(key);
+		if (status === 'idle' || status === 'failed') await this.setStatusOf(key, 'working');
+		const context = liveContext(message.message.usage, this.windows.get(model ?? '') ?? null);
+		if (context && (context.used_tokens !== child.said?.used_tokens || context.total_tokens !== child.said.total_tokens)) {
+			child.said = context;
+			void this.report({ kind: 'context', context }, key);
+		}
+		let images = imagesIn(message.message.content);
+		const text = message.message.content.some((block) => block.type === 'text' && block.text.trim());
+		for (const block of message.message.content) {
+			if (block.type === 'thinking' && block.thinking.trim()) {
+				await this.think(block.thinking, key);
+			} else if (block.type === 'text' && block.text.trim()) {
+				await this.show({ kind: 'text', text: block.text }, images, key);
+				images = [];
+			} else if (block.type === 'tool_use' && block.name !== QUESTION_TOOL && block.name !== PLAN_TOOL) {
+				const input = (block.input ?? {}) as Record<string, unknown>;
+				const content = toolUse(block.name, input, this.context.cwd);
+				const use: Use = { content, held: showsImages(block.name, input), owner: key, shown: [] };
+				this.uses.set(block.id, use);
+				if (!use.held) {
+					use.shown.push(this.show(content, text ? [] : images, key));
+					await use.shown[0];
+					if (!text) images = [];
+				}
 			}
+		}
+	}
+
+	/**
+	 * Tells cohesiond of the subagent `key` Claude Code launched, or more of
+	 * one it knows: `said` is a `task_started` or what of it is new. It goes
+	 * under the subagent whose transcript holds the tool use that launched it.
+	 */
+	private async launchChild(key: string, said: LaunchSaid): Promise<void> {
+		const before = this.children.get(key);
+		const use = said.tool_use_id ? (this.uses.get(said.tool_use_id) ?? this.launched.get(said.tool_use_id)) : undefined;
+		const tool = use?.shown[0] ? (await use.shown[0]).id : -1;
+		const parentTask = said.parent_task_id && this.children.has(said.parent_task_id) ? said.parent_task_id : null;
+		const parent = before?.parent ?? (use ? (use.owner ?? null) : parentTask);
+		const child: Child = {
+			title: said.description?.trim() || before?.title || 'Subagent',
+			parent,
+			// Only a tool use in the transcript one level up can be named.
+			messageId: before?.messageId ?? (use && tool !== -1 && (use.owner ?? null) === parent ? tool : null),
+			type: said.subagent_type ?? before?.type ?? null,
+			model: said.model ?? before?.model ?? null,
+			background: said.is_backgrounded ?? before?.background ?? false,
+			said: before?.said ?? null,
+		};
+		this.children.set(key, child);
+		if (said.tool_use_id) this.taskOf.set(said.tool_use_id, key);
+		try {
+			await this.subagents.launch(key, { title: child.title, parent: child.parent, message_id: child.messageId, agent_type: child.type, model: child.model, background: child.background });
+		} catch (error) {
+			this.context.log(`session ${this.id}: couldn't launch subagent ${key}: ${(error as Error).message}`);
+			return;
+		}
+		// A resumed one launches again, and is at work.
+		if (before && this.subagents.status(key) !== 'working' && !this.asking(key) && said.description !== undefined) await this.setStatusOf(key, 'working');
+	}
+
+	/** A subagent's task changed: where it stands, or whether it runs in the background. */
+	private async updateChild(key: string, patch: { status?: string; error?: string; is_backgrounded?: boolean }): Promise<void> {
+		if (!this.subagents.has(key)) return;
+		if (patch.is_backgrounded !== undefined && patch.is_backgrounded !== this.children.get(key)?.background) await this.launchChild(key, { is_backgrounded: patch.is_backgrounded });
+		switch (patch.status) {
+			case 'running':
+				if (!this.asking(key)) await this.setStatusOf(key, 'working');
+				return;
+			case 'completed':
+				// A killed task can only be said done.
+			case 'killed':
+				await this.setStatusOf(key, 'idle');
+				return;
+			case 'failed':
+				if (patch.error) await this.report({ kind: 'message', content: { kind: 'text', text: patch.error } }, key);
+				await this.setStatusOf(key, 'failed');
+				return;
+		}
+	}
+
+	/** Leaves the subagents still going idle: their process ended, or the session was stopped. */
+	private async settleChildren(): Promise<void> {
+		for (const key of this.subagents.keys) {
+			const status = this.subagents.status(key);
+			if (status === 'working' || status === 'needsAttention') await this.setStatusOf(key, 'idle');
 		}
 	}
 
@@ -297,7 +444,7 @@ export class ActorSession {
 	private async release(): Promise<void> {
 		const held = [...this.uses.values()].filter((use) => use.held);
 		this.uses.clear();
-		for (const use of held) await this.show(use.content);
+		for (const use of held) await this.show(use.content, [], use.owner);
 	}
 
 	/** Ends the tool uses of background agents that are no more. */
@@ -312,7 +459,7 @@ export class ActorSession {
 		for (const shown of use.shown) {
 			const { id } = await shown;
 			// A refused one has nothing to end.
-			if (id !== -1) await this.report({ kind: 'end', message_id: id });
+			if (id !== -1) await this.report({ kind: 'end', message_id: id }, use.owner);
 		}
 	}
 
@@ -320,10 +467,10 @@ export class ActorSession {
 	 * Reports a stretch of thinking and ends it at once: Claude Code gives
 	 * its text only once it is done, and a message's text can't change later.
 	 */
-	private async think(text: string): Promise<void> {
-		const { id } = await this.report({ kind: 'message', content: { kind: 'thinking', text, ended_at: null } });
+	private async think(text: string, owner?: string): Promise<void> {
+		const { id } = await this.report({ kind: 'message', content: { kind: 'thinking', text, ended_at: null } }, owner);
 		// A refused one has nothing to end.
-		if (id !== -1) await this.report({ kind: 'end', message_id: id });
+		if (id !== -1) await this.report({ kind: 'end', message_id: id }, owner);
 	}
 
 	/**
@@ -331,22 +478,22 @@ export class ActorSession {
 	 * take, saying so when there are some it can't show: it refuses a whole
 	 * message for one image, so a refused one goes again without them.
 	 */
-	private async show(content: ActorSaidContent, images: ClientImage[] = []): Promise<{ id: number }> {
+	private async show(content: ActorSaidContent, images: ClientImage[] = [], owner?: string): Promise<{ id: number }> {
 		const checked = sendable(images);
 		for (const why of checked.dropped) this.context.log(`session ${this.id}: an image can't be shown: ${why}`);
 		let dropped = checked.dropped.length;
 		let message: { id: number };
 		if (checked.images.length) {
 			try {
-				message = await this.context.client.report(this.id, { kind: 'message', content, images: checked.images });
+				message = await reportTo(this.context.client, this.id, { kind: 'message', content, images: checked.images }, owner) as { id: number };
 			} catch (error) {
 				this.context.log(`session ${this.id}: update with images refused: ${(error as Error).message}`);
 				dropped += checked.images.length;
-				message = await this.report({ kind: 'message', content });
+				message = await this.report({ kind: 'message', content }, owner);
 			}
-		} else message = await this.report({ kind: 'message', content });
+		} else message = await this.report({ kind: 'message', content }, owner);
 		if (dropped && message.id !== -1) {
-			await this.report({ kind: 'message', content: { kind: 'text', text: unshown(dropped) } });
+			await this.report({ kind: 'message', content: { kind: 'text', text: unshown(dropped) } }, owner);
 		}
 		return message;
 	}
@@ -367,12 +514,25 @@ export class ActorSession {
 					// The steps after it count from what compaction left.
 					const after = message.compact_metadata.post_tokens;
 					if (after !== undefined && this.window) this.setContext(contextUsage(after, this.window));
+				} else if (message.subtype === 'task_started') {
+					if (isSubagent(message)) await this.launchChild(message.task_id, message);
+				} else if (message.subtype === 'task_updated') {
+					await this.updateChild(message.task_id, message.patch);
+				} else if (message.subtype === 'task_progress') {
+					// A subagent still at work is working, such as one that took a resumed turn.
+					const status = this.subagents.status(message.task_id);
+					if (status === 'idle' || status === 'failed') await this.subagents.progress(message.task_id).catch(() => {});
 				} else if (message.subtype === 'task_notification') {
 					// The background agent a tool use launched is done: so is the tool.
 					const use = message.tool_use_id ? this.launched.get(message.tool_use_id) : undefined;
 					if (use && message.tool_use_id) {
 						this.launched.delete(message.tool_use_id);
 						await this.end(use);
+					}
+					if (this.subagents.has(message.task_id)) {
+						const failed = message.status === 'failed';
+						if (failed && message.summary) await this.report({ kind: 'message', content: { kind: 'text', text: message.summary } }, message.task_id);
+						await this.setStatusOf(message.task_id, failed ? 'failed' : 'idle');
 					}
 				} else if (message.subtype === 'background_tasks_changed') {
 					this.background = message.tasks.filter(keepsWorking).map((task) => task.task_id);
@@ -383,8 +543,8 @@ export class ActorSession {
 				this.context.usage.rateLimit(message.rate_limit_info);
 				return;
 			case 'assistant': {
-				// A subagent's own steps stay inside its tool use.
-				if (message.parent_tool_use_id) return;
+				// A subagent's own steps go in its own transcript.
+				if (message.parent_tool_use_id) return this.child(message);
 				await this.resume();
 				// The step's own count at once, then `/context`'s, which counts more, while its tools run.
 				this.setContext(liveContext(message.message.usage, this.window));
@@ -394,7 +554,7 @@ export class ActorSession {
 					this.turn = this.told ? 'asked' : 'own';
 					this.told = false;
 				}
-				if (this.status !== 'working' && this.waiting.size === 0 && (this.turn === 'asked' || usesTool)) await this.setStatus('working');
+				if (this.status !== 'working' && !this.asking(undefined) && (this.turn === 'asked' || usesTool)) await this.setStatus('working');
 				void this.readTitle();
 				// Images Claude shows go with what it says, or else with its first step.
 				let images = imagesIn(message.message.content);
@@ -426,7 +586,7 @@ export class ActorSession {
 				// with its images, and the tool has ended.
 				// Anything else, such as the instructions a skill loads after its
 				// Skill tool use, is for Claude, not the transcript: dropped on purpose.
-				if (message.parent_tool_use_id || typeof message.message.content === 'string') return;
+				if (typeof message.message.content === 'string') return;
 				for (const block of message.message.content) {
 					if (block.type !== 'tool_result') continue;
 					const images = imagesIn(block.content);
@@ -437,8 +597,13 @@ export class ActorSession {
 					const launches = isAgentLaunch(use, message.tool_use_result);
 					if (launches) this.launched.set(block.tool_use_id, use);
 					// One reported already that gave images after all is shown again, with them.
-					if (use.held || images.length) use.shown.push(this.show(use.content, images));
-					if (!launches) await this.end(use);
+					if (use.held || images.length) use.shown.push(this.show(use.content, images, use.owner));
+					if (!launches) {
+						await this.end(use);
+						// A foreground subagent is done with its tool use, whatever it said of itself.
+						const task = this.taskOf.get(block.tool_use_id);
+						if (task && this.subagents.status(task) === 'working') await this.setStatusOf(task, 'idle');
+					}
 				}
 				return;
 			}
@@ -450,6 +615,9 @@ export class ActorSession {
 				// One with no step of its own still took up what was said.
 				if (!this.turn) this.told = false;
 				this.turn = null;
+				for (const [model, usage] of Object.entries(message.modelUsage ?? {})) {
+					if (usage.contextWindow > 0) this.windows.set(model, usage.contextWindow);
+				}
 				void this.measure(stretch, windowOf(message.modelUsage ?? {}));
 				void this.readTitle();
 				await this.release();
@@ -591,15 +759,17 @@ export class ActorSession {
 	 */
 	private readonly prompt: CanUseTool = async (name, input, options): Promise<PermissionResult> => {
 		const asked = request(name, input, options, this.context.cwd);
-		const message = await this.report({ kind: 'message', content: asked });
+		// A subagent's request goes in its own transcript, where the user answers it.
+		const owner = options.agentID && this.subagents.has(options.agentID) ? options.agentID : undefined;
+		const message = await this.report({ kind: 'message', content: asked }, owner);
 		const response = await new Promise<ActorUserContent | null>((resolve) => {
-			this.waiting.set(message.id, resolve);
+			this.waiting.set(message.id, { answer: resolve, owner });
 			options.signal.addEventListener('abort', () => resolve(null), { once: true });
-			void this.setStatus('needsAttention');
+			void this.setStatusOf(owner, 'needsAttention');
 		});
 		this.waiting.delete(message.id);
 		if (!response) return { behavior: 'deny', message: 'Stopped.', interrupt: true };
-		if (this.waiting.size === 0 && !this.stopping) await this.setStatus('working');
+		if (!this.asking(owner) && !this.stopping) await this.setStatusOf(owner, 'working');
 		if (name === PLAN_TOOL && response.kind === 'plan' && response.approved && this.record.mode === 'plan') {
 			// The approved plan moves the session to Auto; a later process mustn't go back.
 			this.record = { ...this.record, mode: AFTER_PLAN };
@@ -607,6 +777,18 @@ export class ActorSession {
 		}
 		return result(name, input, options, response);
 	};
+
+	/** Whether requests wait on the user in `owner`'s transcript: a subagent's, or the session's own. */
+	private asking(owner: string | undefined): boolean {
+		return [...this.waiting.values()].some((waiter) => waiter.owner === owner);
+	}
+
+	/** Sets where `owner` stands: a subagent, or the session itself. */
+	private async setStatusOf(owner: string | undefined, status: ActorSessionStatus): Promise<void> {
+		if (owner === undefined) return this.setStatus(status);
+		if (this.subagents.status(owner) === status) return;
+		await this.subagents.setStatus(owner, status).catch((error: Error) => this.context.log(`session ${this.id}, subagent ${owner}: couldn't say ${status}: ${error.message}`));
+	}
 
 	private async setStatus(status: ActorSessionStatus): Promise<void> {
 		if (this.status === status) return;
@@ -620,21 +802,40 @@ export class ActorSession {
 		await this.report({ kind: 'progress', progress });
 	}
 
-	private report(report: Extract<ActorSessionReport, { kind: 'message' }>): Promise<{ id: number }>;
-	private report(report: ActorSessionReport): Promise<unknown>;
-	private report(report: ActorSessionReport): Promise<unknown> {
-		return this.context.client.report(this.id, report).catch((error: Error) => {
+	private report(report: Extract<SubagentReport, { kind: 'message' }>, subagent?: string): Promise<{ id: number }>;
+	private report(report: SubagentReport, subagent?: string): Promise<unknown>;
+	private report(report: SubagentReport, subagent?: string): Promise<unknown> {
+		// A subagent cohesiond never took: nothing to report into.
+		if (subagent !== undefined && !this.subagents.has(subagent)) return Promise.resolve({ id: -1 });
+		return reportTo(this.context.client, this.id, report, subagent).catch((error: Error) => {
 			// Refused, such as for a session cohesiond no longer has: dropped.
-			this.context.log(`session ${this.id}: update refused: ${error.message}`);
+			this.context.log(`session ${this.id}${subagent === undefined ? '' : `, subagent ${subagent}`}: update refused: ${error.message}`);
 			return { id: -1 };
 		});
 	}
+}
+
+/** What a `task_started`, or a part of one, says of a subagent. */
+interface LaunchSaid {
+	description?: string;
+	subagent_type?: string;
+	model?: string;
+	is_backgrounded?: boolean;
+	tool_use_id?: string;
+	parent_task_id?: string;
+}
+
+/** Whether a started task is a subagent Claude Code launched, not a shell, monitor or ambient task. */
+function isSubagent(task: { task_type?: string; ambient?: boolean; skip_transcript?: boolean }): boolean {
+	return task.task_type === 'local_agent' && !task.ambient && !task.skip_transcript;
 }
 
 /** A tool use waiting on its result. */
 interface Use {
 	content: Extract<ActorSaidContent, { kind: 'toolUse' }>;
 	held: boolean;
+	/** Whose transcript it is in: a subagent's key, or the session's own. */
+	owner?: string;
 	/** The messages showing it, settling with their ids. */
 	shown: Promise<{ id: number }>[];
 }
